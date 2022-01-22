@@ -11,6 +11,8 @@
 #include "freertos/task.h"
 #include "esp_system.h"
 #include "esp_spi_flash.h"
+#include "aiot_state_api.h"
+#include "aiot_sysdep_api.h"
 
 void app_main()
 {
