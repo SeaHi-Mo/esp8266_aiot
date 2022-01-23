@@ -7,6 +7,7 @@
    CONDITIONS OF ANY KIND, either express or implied.
 */
 #include <string.h>
+#include <pthread.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
@@ -21,6 +22,11 @@
 #include "aiot_state_api.h"
 #include "aiot_sysdep_api.h"
 #include "aiot_mqtt_api.h"
+#include "app_data_model.h"
+#include "app_ntp.h"
+#include "app_dynreg_mq.h"
+#include "app_flash.h"
+#include "app_version.h"
 
 /* 位于external/ali_ca_cert.c中的服务器证书 */
 extern const char* ali_ca_cert;
@@ -35,6 +41,12 @@ extern const char* ali_ca_cert;
 #define EXAMPLE_ESP_WIFI_PASS      "fae12345678"
 #define EXAMPLE_MAX_STA_CONN       4
 
+/* TODO: 替换为自己设备的三元组 */
+#ifndef APP_DYNREG_ENABLE
+char* product_key = "a1y36ql6F5x";
+char* device_name = "testdevice";
+char* device_secret = "16cfd2ff9e893a9f5d268c73f622c85b";
+#endif
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
 
@@ -170,9 +182,10 @@ extern aiot_sysdep_portfile_t g_aiot_sysdep_portfile;
 
 static TaskHandle_t g_mqtt_process_task;
 static TaskHandle_t g_mqtt_recv_task;
+
 static uint8_t g_mqtt_process_task_running = 0;
 static uint8_t g_mqtt_recv_task_running = 0;
-
+static pthread_t g_mqtt_ntp_thread;
 /* TODO: 如果要关闭日志, 就把这个函数实现为空, 如果要减少日志, 可根据code选择不打印
  *
  * 例如: [1577589489.033][LK-0317] mqtt_basic_demo&a13FN5TplKq
@@ -184,7 +197,7 @@ static uint8_t g_mqtt_recv_task_running = 0;
  /* 日志回调函数, SDK的日志会从这里输出 */
 int32_t demo_state_logcb(int32_t code, char* message)
 {
-    printf("%s", message);
+    //  printf("%s", message);
     return 0;
 }
 
@@ -230,7 +243,6 @@ void demo_mqtt_default_recv_handler(void* handle, const aiot_mqtt_recv_t* packet
             /* TODO: 处理服务器对心跳的回应, 一般不处理 */
         }
                                              break;
-
         case AIOT_MQTTRECV_SUB_ACK: {
             printf("suback, res: -0x%04X, packet id: %d, max qos: %d\n",
                    -packet->data.sub_ack.res, packet->data.sub_ack.packet_id, packet->data.sub_ack.max_qos);
@@ -294,15 +306,14 @@ int linkkit_main(void)
     BaseType_t  ret;
     int32_t     res = STATE_SUCCESS;
     void* mqtt_handle = NULL;
+    void* md_handle = NULL;
+#ifndef APP_DYNREG_ENABLE
     char* url = "iot-as-mqtt.cn-shanghai.aliyuncs.com"; /* 阿里云平台上海站点的域名后缀 */
-    char        host[100] = { 0 }; /* 用这个数组拼接设备连接的云平台站点全地址, 规则是 ${productKey}.iot-as-mqtt.cn-shanghai.aliyuncs.com */
-    uint16_t    port = 443;      /* 无论设备是否使用TLS连接阿里云平台, 目的端口都是443 */
-    aiot_sysdep_network_cred_t cred; /* 安全凭据结构体, 如果要用TLS, 这个结构体中配置CA证书等参数 */
 
-    /* TODO: 替换为自己设备的三元组 */
-    char* product_key = "a1y36ql6F5x";
-    char* device_name = "testdevice";
-    char* device_secret = "16cfd2ff9e893a9f5d268c73f622c85b";
+    uint16_t    port = 443;      /* 无论设备是否使用TLS连接阿里云平台, 目的端口都是443 */
+#endif
+    char        host[100] = { 0 }; /* 用这个数组拼接设备连接的云平台站点全地址, 规则是 ${productKey}.iot-as-mqtt.cn-shanghai.aliyuncs.com */
+    aiot_sysdep_network_cred_t cred; /* 安全凭据结构体, 如果要用TLS, 这个结构体中配置CA证书等参数 */
 
     /* 配置SDK的底层依赖 */
     aiot_sysdep_set_portfile(&g_aiot_sysdep_portfile);
@@ -316,7 +327,15 @@ int linkkit_main(void)
     cred.sni_enabled = 1;                               /* TLS建连时, 支持Server Name Indicator */
     cred.x509_server_cert = ali_ca_cert;                 /* 用来验证MQTT服务端的RSA根证书 */
     cred.x509_server_cert_len = strlen(ali_ca_cert);     /* 用来验证MQTT服务端的RSA根证书长度 */
+#ifdef APP_DYNREG_ENABLE
+    uint8_t* mac = malloc(6);
+    esp_wifi_get_mac(WIFI_IF_STA, mac);
+    memset(device_name, 0, 13);
+    sprintf(device_name, "%02X%02X%02X%02X%02X%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
+    if (app_flash_read_dynreg(&cloud_device_wl)!=ESP_OK)
+        dynregmq_start(&cloud_device_wl, cred);
+#endif
     /* 创建1个MQTT客户端实例并内部初始化默认参数 */
     mqtt_handle = aiot_mqtt_init();
     if (mqtt_handle == NULL) {
@@ -342,14 +361,22 @@ int linkkit_main(void)
     /* 配置设备deviceName */
     aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_DEVICE_NAME, (void*)device_name);
     /* 配置设备deviceSecret */
+#ifndef APP_DYNREG_ENABLE
+/* 配置设备deviceSecret */
     aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_DEVICE_SECRET, (void*)device_secret);
+#else
+    aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_CLIENTID, cloud_device_wl.conn_clientid);
+    aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_USERNAME, cloud_device_wl.conn_username);
+    aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_PASSWORD, cloud_device_wl.conn_password);
+#endif
     /* 配置网络连接的安全凭据, 上面已经创建好了 */
     aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_NETWORK_CRED, (void*)&cred);
     /* 配置MQTT默认消息接收回调函数 */
     aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_RECV_HANDLER, (void*)demo_mqtt_default_recv_handler);
     /* 配置MQTT事件回调函数 */
     aiot_mqtt_setopt(mqtt_handle, AIOT_MQTTOPT_EVENT_HANDLER, (void*)demo_mqtt_event_handler);
-
+    /* 初始化物模型 */
+    md_handle = app_aiot_data_model_init(mqtt_handle);
     /* 与服务器建立MQTT连接 */
     res = aiot_mqtt_connect(mqtt_handle);
     if (res < STATE_SUCCESS) {
@@ -361,25 +388,12 @@ int linkkit_main(void)
 
     /* MQTT 订阅topic功能示例, 请根据自己的业务需求进行使用 */
     {
-        char* sub_topic = "/sys/a13FN5TplKq/mqtt_basic_demo/thing/event/+/post_reply";
 
-        res = aiot_mqtt_sub(mqtt_handle, sub_topic, NULL, 1, NULL);
-        if (res < 0) {
-            printf("aiot_mqtt_sub failed, res: -0x%04X\n", -res);
-            return -1;
-        }
     }
 
     /* MQTT 发布消息功能示例, 请根据自己的业务需求进行使用 */
     {
-        char* pub_topic = "/sys/a13FN5TplKq/mqtt_basic_demo/thing/event/property/post";
-        char* pub_payload = "{\"id\":\"1\",\"version\":\"1.0\",\"params\":{\"LightSwitch\":0}}";
-
-        res = aiot_mqtt_pub(mqtt_handle, pub_topic, (uint8_t*)pub_payload, (uint32_t)strlen(pub_payload), 0);
-        if (res < 0) {
-            printf("aiot_mqtt_sub failed, res: -0x%04X\n", -res);
-            return -1;
-        }
+        app_send_new_version(mqtt_handle);
     }
 
     /* 创建一个单独的线程, 专用于执行aiot_mqtt_process, 它会自动发送心跳保活, 以及重发QoS1的未应答报文 */
@@ -392,15 +406,22 @@ int linkkit_main(void)
 
     /* 创建一个单独的线程用于执行aiot_mqtt_recv, 它会循环收取服务器下发的MQTT消息, 并在断线时自动重连 */
     g_mqtt_recv_task_running = 1;
-    ret = xTaskCreate(demo_mqtt_recv_task, "mqtt_recv", 2048, mqtt_handle, 5, &g_mqtt_recv_task);
+    ret = xTaskCreate(demo_mqtt_recv_task, "mqtt_recv", 2048, mqtt_handle, 6, &g_mqtt_recv_task);
     if (ret != pdPASS) {
         printf("xTaskCreate demo_mqtt_recv_task failed: %d\n", ret);
         return -1;
     }
 
+    res = pthread_create(&g_mqtt_ntp_thread, NULL, app_aiot_get_ntp_time, mqtt_handle);
+    if (res < 0) {
+        printf("app_aiot_get_ntp_time failed: %d\n", res);
+        return -1;
+    }
     /* 主循环进入休眠 */
     while (1) {
-        sleep(1);
+
+        app_send_property_post(md_handle, 25, 60);
+        sleep(10);
     }
 
     /* 断开MQTT连接, 一般不会运行到这里 */
@@ -433,7 +454,7 @@ void app_main()
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
+    app_flash_set_version();
 #if EXAMPLE_ESP_WIFI_MODE_AP
     ESP_LOGI(TAG, "ESP_WIFI_MODE_AP");
     wifi_init_softap();
