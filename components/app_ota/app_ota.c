@@ -167,6 +167,8 @@ void aiot_mqtt_recv_ota_handler(void* handle, const aiot_mqtt_recv_t* packet, vo
         app_svae_ota_url(app_ota_image.image_url);
         ESP_LOGW(TAG, "2 sec restart and update");
         sleep(2);
+
+        esp_restart();
         // }
     }
 }
