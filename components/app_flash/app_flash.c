@@ -13,7 +13,7 @@
 #include "esp_log.h"
 #include "nvs_flash.h"
 #include "app_flash.h"
-#include "app_version.h"
+#include "app_ota.h"
 static char* TAG = "APP FLASH";
 
 /**
@@ -102,51 +102,79 @@ esp_err_t app_flash_read_dynreg(cloud_device_wl_t* cloud_device)
     return err;
 }
 /**
- * @brief 保存version 到flash
+ * @brief 保存OTA升级的URL
  *
+ * @param url
+ * @return esp_err_t
  */
-esp_err_t app_flash_set_version(void)
+esp_err_t app_svae_ota_url(char* url)
 {
     esp_err_t err = ESP_OK;
-    nvs_handle_t version_handle;
-    err = nvs_open("nvs", NVS_READWRITE, &version_handle);
+    nvs_handle_t ota_url_handle;
+    err = nvs_open("nvs", NVS_READWRITE, &ota_url_handle);
     if (err!=ESP_OK) {
         ESP_LOGE(TAG, "nvs open failse");
         return ESP_FAIL;
     }
-    err = nvs_set_str(version_handle, "version", esp8266_device_version);
+    err = nvs_set_str(ota_url_handle, "ota_url", url);
     if (err!=ESP_OK) {
-        ESP_LOGE(TAG, "nvs set version failse");
-        nvs_close(version_handle);
-        return ESP_FAIL;
+        ESP_LOGE(TAG, "nvs svae ota url fail");
+        nvs_close(ota_url_handle);
+        return ESP_ERR_NO_MEM;
     }
-    nvs_close(version_handle);
-    ESP_LOGI(TAG, "nvs set version OK");
+    nvs_close(ota_url_handle);
+    ESP_LOGI(TAG, "svae ota url:%s", url);
     return err;
 }
 /**
- * @brief app_flash_get_version
- *         从flash 读取version
- * @param version
+ * @brief app_read_ota_url
+ *          读取url 
+ * @param url
  * @return esp_err_t
  */
-esp_err_t app_flash_get_version(char* version)
+esp_err_t app_read_ota_url(char* out_url)
 {
     esp_err_t err = ESP_OK;
-    nvs_handle_t version_handle;
-
-    err = nvs_open("nvs", NVS_READWRITE, &version_handle);
+    nvs_handle_t ota_url_handle;
+    char url[1024] = { 0 };
+    err = nvs_open("nvs", NVS_READWRITE, &ota_url_handle);
     if (err!=ESP_OK) {
         ESP_LOGE(TAG, "nvs open failse");
         return ESP_FAIL;
     }
-    size_t size = strlen(esp8266_device_version);
-    err = nvs_get_str(version_handle, "version", version, &size);
+    size_t size = sizeof(url);
+    err = nvs_get_str(ota_url_handle, "ota_url", url, &size);
     if (err!=ESP_OK) {
-        ESP_LOGE(TAG, "nvs get version failse");
-        nvs_close(version_handle);
+        ESP_LOGE(TAG, "nvs read ota url fail");
+        nvs_close(ota_url_handle);
+        return ESP_ERR_NO_MEM;
+    }
+
+    nvs_close(ota_url_handle);
+    strncpy(out_url, url, size);
+    ESP_LOGI(TAG, "read ota url:%s", out_url);
+    return err;
+}
+/**
+ * @brief app_erase_ota_url
+ *          清空url
+ * @return esp_err_t
+ */
+esp_err_t app_erase_ota_url(void)
+{
+    esp_err_t err = ESP_OK;
+    nvs_handle_t ota_url_handle;
+    err = nvs_open("nvs", NVS_READWRITE, &ota_url_handle);
+    if (err!=ESP_OK) {
+        ESP_LOGE(TAG, "nvs open failse");
         return ESP_FAIL;
     }
-    nvs_close(version_handle);
+    err = nvs_erase_key(ota_url_handle, "ota_url");
+    if (err!=ESP_OK) {
+        ESP_LOGE(TAG, "nvs erase ota url fail");
+        nvs_close(ota_url_handle);
+        return ESP_ERR_NO_MEM;
+    }
+    nvs_close(ota_url_handle);
     return err;
 }

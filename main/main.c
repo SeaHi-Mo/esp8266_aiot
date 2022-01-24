@@ -27,7 +27,7 @@
 #include "app_dynreg_mq.h"
 #include "app_flash.h"
 #include "app_version.h"
-
+#include "app_ota.h"
 /* 位于external/ali_ca_cert.c中的服务器证书 */
 extern const char* ali_ca_cert;
 /* The examples use simple WiFi configuration that you can set via
@@ -49,7 +49,7 @@ char* device_secret = "16cfd2ff9e893a9f5d268c73f622c85b";
 #endif
 /* FreeRTOS event group to signal when we are connected*/
 static EventGroupHandle_t wifi_event_group;
-
+bool aiot_status = false;
 /* The event group allows multiple bits for each event,
    but we only care about one event - are we connected
    to the AP with an IP? */
@@ -186,6 +186,7 @@ static TaskHandle_t g_mqtt_recv_task;
 static uint8_t g_mqtt_process_task_running = 0;
 static uint8_t g_mqtt_recv_task_running = 0;
 static pthread_t g_mqtt_ntp_thread;
+
 /* TODO: 如果要关闭日志, 就把这个函数实现为空, 如果要减少日志, 可根据code选择不打印
  *
  * 例如: [1577589489.033][LK-0317] mqtt_basic_demo&a13FN5TplKq
@@ -208,7 +209,9 @@ void demo_mqtt_event_handler(void* handle, const aiot_mqtt_event_t* event, void*
         /* SDK因为用户调用了aiot_mqtt_connect()接口, 与mqtt服务器建立连接已成功 */
         case AIOT_MQTTEVT_CONNECT: {
             printf("AIOT_MQTTEVT_CONNECT\n");
+
             /* TODO: 处理SDK建连成功, 不可以在这里调用耗时较长的阻塞函数 */
+            aiot_status = true;
         }
                                  break;
 
@@ -216,6 +219,7 @@ void demo_mqtt_event_handler(void* handle, const aiot_mqtt_event_t* event, void*
         case AIOT_MQTTEVT_RECONNECT: {
             printf("AIOT_MQTTEVT_RECONNECT\n");
             /* TODO: 处理SDK重连成功, 不可以在这里调用耗时较长的阻塞函数 */
+            aiot_status = true;
         }
                                    break;
 
@@ -224,6 +228,7 @@ void demo_mqtt_event_handler(void* handle, const aiot_mqtt_event_t* event, void*
             char* cause = (event->data.disconnect == AIOT_MQTTDISCONNEVT_NETWORK_DISCONNECT) ? ("network disconnect") :
                 ("heartbeat disconnect");
             printf("AIOT_MQTTEVT_DISCONNECT: %s\n", cause);
+            aiot_status = false;
             /* TODO: 处理SDK被动断连, 不可以在这里调用耗时较长的阻塞函数 */
         }
                                     break;
@@ -307,6 +312,7 @@ int linkkit_main(void)
     int32_t     res = STATE_SUCCESS;
     void* mqtt_handle = NULL;
     void* md_handle = NULL;
+
 #ifndef APP_DYNREG_ENABLE
     char* url = "iot-as-mqtt.cn-shanghai.aliyuncs.com"; /* 阿里云平台上海站点的域名后缀 */
 
@@ -388,7 +394,7 @@ int linkkit_main(void)
 
     /* MQTT 订阅topic功能示例, 请根据自己的业务需求进行使用 */
     {
-
+        esp_ota_aiot_pthread(mqtt_handle);
     }
 
     /* MQTT 发布消息功能示例, 请根据自己的业务需求进行使用 */
@@ -417,10 +423,11 @@ int linkkit_main(void)
         printf("app_aiot_get_ntp_time failed: %d\n", res);
         return -1;
     }
+
     /* 主循环进入休眠 */
     while (1) {
-
-        app_send_property_post(md_handle, 25, 60);
+        if (aiot_status)
+            app_send_property_post(md_handle, 25, 60);
         sleep(10);
     }
 
@@ -454,7 +461,7 @@ void app_main()
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-    app_flash_set_version();
+
 #if EXAMPLE_ESP_WIFI_MODE_AP
     ESP_LOGI(TAG, "ESP_WIFI_MODE_AP");
     wifi_init_softap();
@@ -462,7 +469,7 @@ void app_main()
     ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
     wifi_init_sta();
 #endif /*EXAMPLE_ESP_WIFI_MODE_AP*/
-
+    ota_download_thread();
     /* wifi连接成功，开始启动mqtt连上阿里云物联网平台 */
     ESP_LOGI(TAG, "Start linkkit main");
     linkkit_main();

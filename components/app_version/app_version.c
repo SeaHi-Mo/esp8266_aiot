@@ -5,8 +5,7 @@
 #include "esp_log.h"
 #include "esp_err.h"
 #include "ota_private.h"
-#include "esp_ota_ops.h"
-#include "esp_https_ota.h"
+
 #include "aiot_state_api.h"
 #include "aiot_sysdep_api.h"
 #include "aiot_mqtt_api.h"
@@ -16,6 +15,8 @@
 #include "app_flash.h"
 static char* TAG = "APP_SERSION";
 extern time_t now;
+
+
 #ifndef APP_DYNREG_ENABLE
 extern char* product_key;
 extern char* device_name;
@@ -51,11 +52,13 @@ static char* create_ota_version_cjson(char* verison)
 int32_t app_send_new_version(void* mqtt_handle)
 {
     int32_t res = STATE_SUCCESS;
-    char ota_topic[128] = { 0 };
 
+    char ota_topic[128] = { 0 };
+    esp_app_desc_t* app_desc_version = NULL;
     sprintf(ota_topic, "%s/%s/%s", OTA_VERSION_TOPIC_PREFIX, product_key, device_name);
 
-    char* src = create_ota_version_cjson(esp8266_device_version);
+    app_desc_version = esp_ota_get_app_description();
+    char* src = create_ota_version_cjson(app_desc_version->version);
     printf("%s\r\n", src);
     res = aiot_mqtt_pub(mqtt_handle, ota_topic, (uint8_t*)src, strlen(src), 1);
     if (res<STATE_SUCCESS) {

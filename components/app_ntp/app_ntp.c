@@ -48,8 +48,8 @@ static void aiot_set_system_time(char* time_date)
         cJSON_Delete(ROOT);
         return;
     }
-    if ((((long)(SST->valuedouble/1000))-now)>120 || (now-((long)(SST->valuedouble/1000)))>120)
-        now = (long)(SST->valuedouble/1000);
+    /*if ((((long)(SST->valuedouble/1000))-now)>120 || (now-((long)(SST->valuedouble/1000)))>120)*/
+    now = (long)(SST->valuedouble/1000);
     struct timeval tv;
     tv.tv_sec = now;
     setenv("TZ", "CST-8", 1);
@@ -108,10 +108,10 @@ void* app_aiot_get_ntp_time(void* mqtt_handle)
         ESP_LOGE(TAG, "aiot_mqtt_sub ntp failse: %d", res);
     }
     while (1) {
-        time(&now);
         i++;
         if (i>180) {
             memset(payload, 0, 128);
+            time(&now);
             sprintf((char*)payload, NTP_REQUEST_PAYLOAD_FMT, now);
             res = aiot_mqtt_pub(mqtt_handle, topic, payload, strlen((char*)payload), 0);
             if (res < 0) {
